@@ -191,6 +191,7 @@ function pickFormation(wave) {
 
 export function createEnemyGrid(wave, diff) {
   const enemies = [];
+  const spacingTighten = Math.max(0.7, 1 - (wave - 1) * 0.03);
   const cellW = (ENEMY_WIDTH + ENEMY_PADDING_X) * spacingTighten;
   const cellH = (ENEMY_HEIGHT + ENEMY_PADDING_Y) * spacingTighten;
 
@@ -439,17 +440,38 @@ export function updateEnemyGrid(grid, bullets, dt) {
   }
 
   // Entry animation
+  let stillEntering = false;
   for (const e of grid.enemies) {
     if (!e.entering || !e.alive) continue;
     e.entryDelay -= dt;
-    if (e.entryDelay > 0) continue;
-
-    const speed = 300;
+    if (e.entryDelay > 0) {
+      stillEntering = true;
+      continue;
+    }
+    const speed = 250;
     e.y += speed * dt;
     if (e.y >= e.targetY) {
       e.y = e.targetY;
       e.baseY = e.targetY;
       e.entering = false;
+    } else {
+      stillEntering = true;
+    }
+  }
+
+  // Don't move grid or fire until all have entered (max 4s safety)
+  if (!grid.entryTime) grid.entryTime = 0;
+  grid.entryTime += dt;
+  if (stillEntering && grid.entryTime < 4) return;
+
+  // Force all remaining entering enemies in
+  if (stillEntering) {
+    for (const e of grid.enemies) {
+      if (e.entering && e.alive) {
+        e.y = e.targetY;
+        e.baseY = e.targetY;
+        e.entering = false;
+      }
     }
   }
 
