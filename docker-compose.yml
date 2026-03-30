@@ -1,0 +1,6 @@
+services:
+  cantina:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "3080:80"
