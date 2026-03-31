@@ -1,0 +1,554 @@
+import { CANVAS_WIDTH, CANVAS_HEIGHT } from './constants';
+import {
+  CATEGORIES, SHOP_ITEMS,
+  loadWallet, loadOwned, loadEquipped,
+  isOwned, buyItem, equipItem,
+} from './shop';
+import type { ShopCategory, SkinItem, BulletItem, TrailItem, BarrierItem, ShopItem, Wallet, OwnedItems, EquippedItems } from './shop';
+import { drawCatShip } from './sprites';
+import { sfxMenuSelect, sfxPowerUp } from './audio';
+
+interface Rarity {
+  readonly name: string;
+  readonly color: string;
+  readonly bgAlpha: number;
+  readonly border: string | null;
+}
+
+export interface ShopUIState {
+  categoryIndex: number;
+  itemIndex: number;
+  wallet: Wallet;
+  owned: OwnedItems;
+  equipped: EquippedItems;
+  flashMessage: string;
+  flashTimer: number;
+  scrollOffset: number;
+}
+
+interface GameLike {
+  state: number;
+  skin: SkinItem;
+}
+
+// Rarity tiers based on price
+function getRarity(price: number): Rarity {
+  if (price === 0) return { name: 'BASIC', color: '#888888', bgAlpha: 0.03, border: null };
+  if (price <= 300) return { name: 'COMMON', color: '#44cc44', bgAlpha: 0.05, border: '#44cc44' };
+  if (price <= 600) return { name: 'RARE', color: '#4488ff', bgAlpha: 0.06, border: '#4488ff' };
+  if (price <= 1000) return { name: 'EPIC', color: '#aa44ff', bgAlpha: 0.08, border: '#aa44ff' };
+  if (price <= 2000) return { name: 'LEGENDARY', color: '#ff8800', bgAlpha: 0.1, border: '#ff8800' };
+  return { name: 'MYTHIC', color: '#ff44aa', bgAlpha: 0.12, border: '#ff44aa' };
+}
+
+export function createShopState(): ShopUIState {
+  return {
+    categoryIndex: 0,
+    itemIndex: 0,
+    wallet: loadWallet(),
+    owned: loadOwned(),
+    equipped: loadEquipped(),
+    flashMessage: '',
+    flashTimer: 0,
+    scrollOffset: 0,
+  };
+}
+
+export function updateShopUI(shop: ShopUIState, dt: number): void {
+  if (shop.flashTimer > 0) {
+    shop.flashTimer = Math.max(0, shop.flashTimer - dt);
+  }
+}
+
+export function renderShopUI(ctx: CanvasRenderingContext2D, shop: ShopUIState, time: number): void {
+  const cx = CANVAS_WIDTH / 2;
+
+  // Background
+  ctx.fillStyle = '#050510';
+  ctx.fillRect(0, 0, CANVAS_WIDTH, CANVAS_HEIGHT);
+
+  // Animated background particles
+  for (let i = 0; i < 15; i++) {
+    const px = ((time * 8 + i * 137) % CANVAS_WIDTH);
+    const py = ((time * 12 + i * 89) % CANVAS_HEIGHT);
+    const alpha = 0.05 + 0.03 * Math.sin(time * 2 + i);
+    ctx.fillStyle = `rgba(255, 204, 0, ${alpha})`;
+    ctx.fillRect(px, py, 2, 2);
+  }
+
+  ctx.textAlign = 'center';
+
+  // Title with glow
+  const titleGlow = 0.3 + 0.1 * Math.sin(time * 3);
+  ctx.fillStyle = `rgba(255, 204, 0, ${titleGlow})`;
+  ctx.fillRect(cx - 100, 12, 200, 26);
+  ctx.fillStyle = '#ffcc00';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('COSMIC SHOP', cx, 30);
+
+  // Coin balance with icon
+  ctx.fillStyle = '#000';
+  ctx.fillRect(cx - 50, 38, 100, 18);
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - 50, 38, 100, 18);
+  const coinPulse = 0.8 + 0.2 * Math.sin(time * 4);
+  ctx.fillStyle = `rgba(255, 204, 0, ${coinPulse})`;
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText(`${shop.wallet.coins}`, cx, 52);
+
+  // Category tabs with active glow
+  const tabY = 62;
+  const tabW = CANVAS_WIDTH / CATEGORIES.length;
+  for (let i = 0; i < CATEGORIES.length; i++) {
+    const cat = CATEGORIES[i]!;
+    const tx = tabW * i + tabW / 2;
+    const isActive = i === shop.categoryIndex;
+
+    if (isActive) {
+      const tabGlow = 0.15 + 0.05 * Math.sin(time * 4);
+      ctx.fillStyle = `rgba(255, 204, 0, ${tabGlow})`;
+      ctx.fillRect(tabW * i, tabY, tabW, 22);
+      ctx.fillStyle = '#ffcc00';
+      ctx.fillRect(tabW * i, tabY + 20, tabW, 2);
+    } else {
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.03)';
+      ctx.fillRect(tabW * i, tabY, tabW, 22);
+    }
+
+    ctx.fillStyle = isActive ? '#ffcc00' : '#555555';
+    ctx.font = isActive ? 'bold 11px monospace' : '10px monospace';
+    ctx.fillText(cat.name, tx, tabY + 15);
+  }
+
+  // Items list
+  const category = CATEGORIES[shop.categoryIndex]!;
+  const items = SHOP_ITEMS[category.id];
+  const listY = 92;
+  const itemH = 72;
+  const visibleItems = 6;
+
+  const maxScroll = Math.max(0, items.length - visibleItems);
+  shop.scrollOffset = Math.max(0, Math.min(shop.scrollOffset, maxScroll));
+
+  for (let vi = 0; vi < visibleItems && vi + shop.scrollOffset < items.length; vi++) {
+    const idx = vi + shop.scrollOffset;
+    const item = items[idx] as ShopItem;
+    const iy = listY + vi * itemH;
+    const isSelected = idx === shop.itemIndex;
+    const owned = isOwned(shop.owned, category.id, item.id);
+    const equipped = shop.equipped[category.id] === item.id;
+    const rarity = getRarity(item.price);
+
+    // Item card background
+    ctx.fillStyle = `rgba(255, 255, 255, ${rarity.bgAlpha})`;
+    ctx.fillRect(8, iy, CANVAS_WIDTH - 16, itemH - 4);
+
+    // Rarity stripe on left edge
+    if (rarity.border) {
+      const stripePulse = isSelected ? 0.8 + 0.2 * Math.sin(time * 5) : 0.6;
+      ctx.fillStyle = rarity.border;
+      ctx.globalAlpha = stripePulse;
+      ctx.fillRect(8, iy, 3, itemH - 4);
+      ctx.globalAlpha = 1;
+    }
+
+    // Selected card — animated border
+    if (isSelected) {
+      const selPulse = 0.6 + 0.4 * Math.sin(time * 4);
+      ctx.strokeStyle = rarity.border || '#ffcc00';
+      ctx.globalAlpha = selPulse;
+      ctx.lineWidth = 2;
+      ctx.strokeRect(8, iy, CANVAS_WIDTH - 16, itemH - 4);
+      ctx.globalAlpha = 1;
+
+      // Shimmer effect on selected card
+      const shimmerX = ((time * 150) % (CANVAS_WIDTH + 40)) - 20;
+      ctx.save();
+      ctx.globalAlpha = 0.08;
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath();
+      ctx.moveTo(shimmerX, iy);
+      ctx.lineTo(shimmerX + 20, iy);
+      ctx.lineTo(shimmerX + 10, iy + itemH - 4);
+      ctx.lineTo(shimmerX - 10, iy + itemH - 4);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    // Equipped badge — gold corner
+    if (equipped) {
+      ctx.fillStyle = '#ffcc00';
+      ctx.beginPath();
+      ctx.moveTo(CANVAS_WIDTH - 8, iy);
+      ctx.lineTo(CANVAS_WIDTH - 8, iy + 20);
+      ctx.lineTo(CANVAS_WIDTH - 28, iy);
+      ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 7px monospace';
+      ctx.save();
+      ctx.translate(CANVAS_WIDTH - 15, iy + 9);
+      ctx.rotate(Math.PI / 4);
+      ctx.fillText('E', -2, 2);
+      ctx.restore();
+    }
+
+    // Preview area with glow background
+    const previewX = 42;
+    const previewY = iy + itemH / 2 - 4;
+
+    // Preview glow
+    const glowColor = (item as SkinItem).glow || rarity.border;
+    if (glowColor) {
+      ctx.save();
+      ctx.globalAlpha = 0.15 + (isSelected ? 0.1 * Math.sin(time * 3) : 0);
+      ctx.fillStyle = glowColor;
+      ctx.beginPath();
+      ctx.arc(previewX, previewY, 18, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (category.id === 'skins') {
+      const skinItem = item as SkinItem;
+      // Rainbow skin special animation
+      if (skinItem.rainbow) {
+        const hue = (time * 60) % 360;
+        const rainbowItem: SkinItem = {
+          ...skinItem,
+          body: `hsl(${hue}, 80%, 50%)`,
+          stripe: `hsl(${(hue + 40) % 360}, 80%, 35%)`,
+          ear: `hsl(${(hue + 120) % 360}, 80%, 60%)`,
+        };
+        drawCatShip(ctx, previewX, previewY, rainbowItem);
+      } else {
+        drawCatShip(ctx, previewX, previewY, skinItem);
+      }
+    } else if (category.id === 'bullets') {
+      const bulletItem = item as BulletItem;
+      // Animated bullet preview — shooting upward
+      const bulletPhase = (time * 3 + idx) % 1;
+      const by = previewY + 10 - bulletPhase * 20;
+      ctx.fillStyle = bulletItem.color;
+      ctx.fillRect(previewX - 2, by - 4, 4, 8);
+      if (bulletItem.trail) {
+        ctx.globalAlpha = 0.5;
+        ctx.fillStyle = bulletItem.trail;
+        ctx.fillRect(previewX - 1, by + 2, 2, 6);
+        ctx.fillRect(previewX - 1, by + 6, 2, 4);
+        ctx.globalAlpha = 1;
+      }
+      // Second bullet offset
+      const by2 = previewY + 10 - ((bulletPhase + 0.5) % 1) * 20;
+      ctx.fillStyle = bulletItem.color;
+      ctx.fillRect(previewX - 2, by2 - 3, 4, 6);
+    } else if (category.id === 'trails') {
+      const trailItem = item as TrailItem;
+      // Animated trail preview — swirl
+      if (trailItem.id === 'none') {
+        ctx.fillStyle = '#333';
+        ctx.font = '14px monospace';
+        ctx.fillText('-', previewX, previewY + 4);
+      } else if (trailItem.id === 'rainbow_t') {
+        for (let j = 0; j < 8; j++) {
+          const angle = time * 3 + j * 0.8;
+          const trailX = previewX + Math.cos(angle) * (8 - j);
+          const trailY = previewY + Math.sin(angle) * (8 - j);
+          const hue = (time * 80 + j * 40) % 360;
+          ctx.fillStyle = `hsl(${hue}, 90%, 60%)`;
+          ctx.globalAlpha = 1 - j * 0.1;
+          ctx.fillRect(trailX - 1, trailY - 1, 3, 3);
+        }
+        ctx.globalAlpha = 1;
+      } else {
+        for (let j = 0; j < 6; j++) {
+          const angle = time * 2 + j * 1.0;
+          const trailX = previewX + Math.cos(angle) * (7 - j);
+          const trailY = previewY + Math.sin(angle) * (7 - j);
+          ctx.fillStyle = trailItem.color || '#888';
+          ctx.globalAlpha = 0.8 - j * 0.12;
+          ctx.fillRect(trailX - 1, trailY - 1, 3, 3);
+        }
+        ctx.globalAlpha = 1;
+      }
+    } else if (category.id === 'barriers') {
+      const barrierItem = item as BarrierItem;
+      // Barrier preview — small arch
+      if (barrierItem.id === 'flowers') {
+        // Original tulip/lily colors
+        for (let r = 0; r < 3; r++) {
+          for (let c = 0; c < 5; c++) {
+            ctx.fillStyle = (r + c) % 2 === 0 ? '#ee5577' : '#ffffee';
+            ctx.fillRect(previewX - 10 + c * 4, previewY - 6 + r * 4, 3, 3);
+          }
+        }
+      } else {
+        const pulse = 0.7 + 0.3 * Math.sin(time * 3 + idx);
+        for (let r = 0; r < 3; r++) {
+          for (let c = 0; c < 5; c++) {
+            ctx.fillStyle = (r + c) % 2 === 0 ? (barrierItem.color1 || '#888') : (barrierItem.color2 || '#aaa');
+            ctx.globalAlpha = pulse;
+            ctx.fillRect(previewX - 10 + c * 4, previewY - 6 + r * 4, 3, 3);
+          }
+        }
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    // Item name with rarity color
+    ctx.textAlign = 'left';
+    const nameColor = equipped ? '#ffcc00' : owned ? '#ffffff' : rarity.color;
+    ctx.fillStyle = nameColor;
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(item.name, 68, iy + 14);
+
+    // Rarity tag + perk
+    ctx.fillStyle = rarity.color;
+    ctx.font = '8px monospace';
+    ctx.fillText(rarity.name, 68, iy + 24);
+
+    // Perk (gameplay benefit) — highlighted
+    if (item.perk && item.perk !== 'No bonus') {
+      ctx.fillStyle = '#44ffaa';
+      ctx.font = 'bold 9px monospace';
+      ctx.fillText(item.perk, 68, iy + 36);
+    } else {
+      ctx.fillStyle = '#555';
+      ctx.font = '9px monospace';
+      ctx.fillText(item.desc, 68, iy + 36);
+    }
+
+    // Description line 2
+    ctx.fillStyle = '#555555';
+    ctx.font = '8px monospace';
+    ctx.fillText(item.desc, 68, iy + 48);
+
+    // Price / status on right
+    ctx.textAlign = 'right';
+    if (equipped) {
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText('EQUIPPED', CANVAS_WIDTH - 16, iy + 18);
+      // Checkmark
+      ctx.fillStyle = '#ffcc00';
+      ctx.font = '16px monospace';
+      ctx.fillText('\u2713', CANVAS_WIDTH - 16, iy + 38);
+    } else if (owned) {
+      ctx.fillStyle = '#44ff44';
+      ctx.font = '11px monospace';
+      ctx.fillText('OWNED', CANVAS_WIDTH - 16, iy + 18);
+    } else {
+      // Price with coin icon
+      const canAfford = shop.wallet.coins >= item.price;
+      ctx.fillStyle = canAfford ? '#ffcc00' : '#ff4444';
+      ctx.font = 'bold 14px monospace';
+      ctx.fillText(`${item.price}`, CANVAS_WIDTH - 16, iy + 20);
+      ctx.fillStyle = canAfford ? '#cc9900' : '#993333';
+      ctx.font = '9px monospace';
+      ctx.fillText('COINS', CANVAS_WIDTH - 16, iy + 32);
+
+      // Lock icon if can't afford
+      if (!canAfford) {
+        ctx.fillStyle = '#ff4444';
+        ctx.font = '12px monospace';
+        ctx.fillText('\u{1F512}', CANVAS_WIDTH - 16, iy + 48);
+      }
+    }
+
+    // Action button for selected item
+    if (isSelected && !equipped) {
+      const btnY = iy + 48;
+      const btnText = owned ? '[ EQUIP ]' : canAffordItem(shop, item) ? `[ BUY ${item.price} ]` : 'NEED MORE COINS';
+      const btnColor = owned ? '#44ff44' : canAffordItem(shop, item) ? '#ffcc00' : '#ff4444';
+
+      // Button background
+      if (owned || canAffordItem(shop, item)) {
+        ctx.fillStyle = `rgba(${owned ? '68,255,68' : '255,204,0'}, 0.1)`;
+        ctx.fillRect(cx - 60, btnY - 2, 120, 16);
+      }
+
+      ctx.fillStyle = btnColor;
+      ctx.font = 'bold 10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(btnText, cx, btnY + 10);
+    }
+
+    ctx.textAlign = 'center';
+  }
+
+  // Scroll indicators
+  if (shop.scrollOffset > 0) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = '14px monospace';
+    ctx.fillText('\u25B2', cx, listY - 4);
+  }
+  if (shop.scrollOffset < maxScroll) {
+    ctx.fillStyle = '#ffcc00';
+    ctx.font = '14px monospace';
+    ctx.fillText('\u25BC', cx, listY + visibleItems * itemH + 10);
+  }
+
+  // Flash message with glow
+  if (shop.flashTimer > 0) {
+    const alpha = Math.min(1, shop.flashTimer / 0.3);
+    const isSuccess = shop.flashMessage.includes('PURCHASED') || shop.flashMessage.includes('EQUIPPED');
+
+    ctx.save();
+    ctx.globalAlpha = alpha * 0.3;
+    ctx.fillStyle = isSuccess ? '#44ff44' : '#ff4444';
+    ctx.fillRect(0, CANVAS_HEIGHT - 55, CANVAS_WIDTH, 24);
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = isSuccess ? '#44ff44' : '#ff4444';
+    ctx.font = 'bold 14px monospace';
+    ctx.fillText(shop.flashMessage, cx, CANVAS_HEIGHT - 38);
+    ctx.restore();
+  }
+
+  // Back button
+  ctx.fillStyle = 'rgba(255,255,255,0.05)';
+  ctx.fillRect(cx - 40, CANVAS_HEIGHT - 24, 80, 20);
+  ctx.strokeStyle = '#555';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(cx - 40, CANVAS_HEIGHT - 24, 80, 20);
+  ctx.fillStyle = '#aaaaaa';
+  ctx.font = 'bold 11px monospace';
+  ctx.fillText('< BACK', cx, CANVAS_HEIGHT - 10);
+
+  ctx.textAlign = 'left';
+}
+
+function canAffordItem(shop: ShopUIState, item: ShopItem): boolean {
+  return shop.wallet.coins >= item.price;
+}
+
+export function handleShopTouch(shop: ShopUIState, tx: number, ty: number, game: GameLike): void {
+  const tabY = 62;
+  const tabW = CANVAS_WIDTH / CATEGORIES.length;
+  const listY = 92;
+  const itemH = 72;
+  const visibleItems = 6;
+
+  // Category tabs
+  if (ty >= tabY && ty < tabY + 22) {
+    const newIdx = Math.floor(tx / tabW);
+    if (newIdx >= 0 && newIdx < CATEGORIES.length) {
+      shop.categoryIndex = newIdx;
+      shop.itemIndex = 0;
+      shop.scrollOffset = 0;
+      sfxMenuSelect();
+    }
+    return;
+  }
+
+  // Back button
+  if (ty > CANVAS_HEIGHT - 30) {
+    game.state = 0;
+    game.skin = getEquippedSkinFromShop();
+    sfxMenuSelect();
+    return;
+  }
+
+  // Scroll up
+  if (ty >= listY - 12 && ty < listY) {
+    shop.scrollOffset = Math.max(0, shop.scrollOffset - 1);
+    return;
+  }
+
+  // Scroll down
+  if (ty >= listY + visibleItems * itemH && ty < listY + visibleItems * itemH + 18) {
+    const items = SHOP_ITEMS[CATEGORIES[shop.categoryIndex]!.id];
+    const maxScroll = Math.max(0, items.length - visibleItems);
+    shop.scrollOffset = Math.min(maxScroll, shop.scrollOffset + 1);
+    return;
+  }
+
+  // Item selection / action
+  if (ty >= listY && ty < listY + visibleItems * itemH) {
+    const relY = ty - listY;
+    const vi = Math.floor(relY / itemH);
+    const idx = vi + shop.scrollOffset;
+    const category = CATEGORIES[shop.categoryIndex]!;
+    const items = SHOP_ITEMS[category.id];
+
+    if (idx >= 0 && idx < items.length) {
+      if (idx === shop.itemIndex) {
+        performAction(shop, category, items[idx] as ShopItem, game);
+      } else {
+        shop.itemIndex = idx;
+        sfxMenuSelect();
+      }
+    }
+  }
+}
+
+function performAction(shop: ShopUIState, category: ShopCategory, item: ShopItem, game: GameLike): void {
+  const owned = isOwned(shop.owned, category.id, item.id);
+  const equipped = shop.equipped[category.id] === item.id;
+
+  if (equipped) return;
+
+  if (owned) {
+    shop.equipped = equipItem(shop.equipped, category.id, item.id);
+    shop.flashMessage = `${item.name} EQUIPPED!`;
+    shop.flashTimer = 1.5;
+    sfxPowerUp();
+    if (category.id === 'skins') game.skin = item as SkinItem;
+  } else {
+    const result = buyItem(shop.wallet, shop.owned, category.id, item.id);
+    if (result.success) {
+      shop.wallet = result.wallet;
+      shop.owned = result.owned;
+      shop.equipped = equipItem(shop.equipped, category.id, item.id);
+      shop.flashMessage = `${item.name} PURCHASED!`;
+      shop.flashTimer = 1.5;
+      sfxPowerUp();
+      if (category.id === 'skins') game.skin = item as SkinItem;
+    } else {
+      shop.flashMessage = 'NOT ENOUGH COINS!';
+      shop.flashTimer = 1.5;
+    }
+  }
+}
+
+function getEquippedSkinFromShop(): SkinItem {
+  const equipped = loadEquipped();
+  const skins = SHOP_ITEMS.skins;
+  return skins.find((s) => s.id === equipped.skins) ?? skins[0]!;
+}
+
+export function handleShopKeyboard(shop: ShopUIState, game: GameLike, consumeKeyFn: (code: string) => boolean): void {
+  if (consumeKeyFn('Escape')) {
+    game.state = 0;
+    game.skin = getEquippedSkinFromShop();
+    return;
+  }
+  if (consumeKeyFn('ArrowLeft') || consumeKeyFn('KeyA')) {
+    shop.categoryIndex = (shop.categoryIndex - 1 + CATEGORIES.length) % CATEGORIES.length;
+    shop.itemIndex = 0;
+    shop.scrollOffset = 0;
+    sfxMenuSelect();
+  }
+  if (consumeKeyFn('ArrowRight') || consumeKeyFn('KeyD')) {
+    shop.categoryIndex = (shop.categoryIndex + 1) % CATEGORIES.length;
+    shop.itemIndex = 0;
+    shop.scrollOffset = 0;
+    sfxMenuSelect();
+  }
+  if (consumeKeyFn('ArrowUp') || consumeKeyFn('KeyW')) {
+    shop.itemIndex = Math.max(0, shop.itemIndex - 1);
+    if (shop.itemIndex < shop.scrollOffset) shop.scrollOffset = shop.itemIndex;
+    sfxMenuSelect();
+  }
+  if (consumeKeyFn('ArrowDown') || consumeKeyFn('KeyS')) {
+    const items = SHOP_ITEMS[CATEGORIES[shop.categoryIndex]!.id];
+    shop.itemIndex = Math.min(items.length - 1, shop.itemIndex + 1);
+    if (shop.itemIndex >= shop.scrollOffset + 6) shop.scrollOffset = shop.itemIndex - 5;
+    sfxMenuSelect();
+  }
+  if (consumeKeyFn('Enter') || consumeKeyFn('Space')) {
+    const category = CATEGORIES[shop.categoryIndex]!;
+    const items = SHOP_ITEMS[category.id];
+    const item = items[shop.itemIndex] as ShopItem | undefined;
+    if (item) performAction(shop, category, item, game);
+  }
+}

@@ -2,44 +2,135 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Sofia's Cosmic Cantina</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
   <link rel="manifest" href="/manifest.json">
-  <meta name="theme-color" content="#ffcc00">
+  <meta name="theme-color" content="#000000">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: #000;
-      display: flex;
-      justify-content: center;
-      align-items: center;
-      height: 100vh;
-      overflow: hidden;
-    }
+
     html, body {
       width: 100%;
       height: 100%;
+      overflow: hidden;
+      background: radial-gradient(ellipse at 50% 30%, #0a0a2e 0%, #050510 50%, #000000 100%);
+
+      /* Prevent all browser touch behaviors */
       touch-action: none;
       -webkit-touch-callout: none;
       -webkit-user-select: none;
       user-select: none;
+
+      /* Prevent overscroll bounce on iOS */
+      overscroll-behavior: none;
+      -webkit-overflow-scrolling: auto;
+
+      /* Safe area: extend into notch/home-bar area */
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
     }
+
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      /* Fill the safe area */
+      min-height: 100dvh;
+      min-height: -webkit-fill-available;
+    }
+
     canvas {
       image-rendering: pixelated;
       image-rendering: crisp-edges;
       display: block;
+      -webkit-user-drag: none;
+      font-family: 'Press Start 2P', monospace;
     }
+
+    /* Landscape rotation prompt */
+    #rotate-prompt {
+      display: none;
+      position: fixed;
+      inset: 0;
+      z-index: 9999;
+      background: #000;
+      color: #ffcc00;
+      font-family: monospace;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 20px;
+      text-align: center;
+    }
+    #rotate-prompt .icon {
+      font-size: 60px;
+      animation: rotate-hint 1.5s ease-in-out infinite;
+    }
+    #rotate-prompt .text {
+      font-size: 16px;
+      letter-spacing: 2px;
+    }
+    @keyframes rotate-hint {
+      0%, 100% { transform: rotate(0deg); }
+      50% { transform: rotate(-90deg); }
+    }
+
+    /* Show prompt only in landscape on mobile (max-height catches landscape) */
+    @media (orientation: landscape) and (max-height: 500px) {
+      #rotate-prompt { display: flex; }
+      canvas { display: none; }
+    }
+
+    /* Prevent pull-to-refresh on Android Chrome */
+    body { overscroll-behavior-y: contain; }
+
+    /* Prevent text selection highlight on long-press */
+    * { -webkit-tap-highlight-color: transparent; }
   </style>
 </head>
 <body>
+  <div id="rotate-prompt">
+    <div class="icon">📱</div>
+    <div class="text">ROTATE YOUR DEVICE</div>
+    <div style="font-size: 12px; color: #888;">This game is best played in portrait mode</div>
+  </div>
   <canvas id="game"></canvas>
-  <script type="module" src="/src/main.js"></script>
+  <script type="module" src="/src/main.ts"></script>
   <script>
+    // Cleanup old service workers
     if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js').catch(() => {});
+      navigator.serviceWorker.getRegistrations().then(regs =>
+        regs.forEach(r => r.unregister())
+      );
     }
+
+    // Lock orientation to portrait if API available
+    if (screen.orientation && screen.orientation.lock) {
+      screen.orientation.lock('portrait').catch(() => {});
+    }
+
+    // Prevent pinch zoom on iOS
+    document.addEventListener('gesturestart', e => e.preventDefault());
+    document.addEventListener('gesturechange', e => e.preventDefault());
+
+    // Prevent double-tap zoom
+    let lastTouchEnd = 0;
+    document.addEventListener('touchend', function(e) {
+      const now = Date.now();
+      if (now - lastTouchEnd <= 300) e.preventDefault();
+      lastTouchEnd = now;
+    }, false);
+
+    // Fix iOS 100vh bug — set CSS custom property to actual viewport height
+    function setVH() {
+      document.documentElement.style.setProperty('--vh', window.innerHeight + 'px');
+    }
+    window.addEventListener('resize', setVH);
+    setVH();
   </script>
 </body>
 </html>
