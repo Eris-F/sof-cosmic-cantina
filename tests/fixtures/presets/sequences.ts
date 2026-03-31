@@ -52,7 +52,7 @@ export async function playUntilWave(
   await startGame(harness);
 
   await harness.setState({
-    ui: { stats: { wave: targetWave } },
+    combat: { wave: targetWave },
   });
   await harness.tickN(10);
 }
@@ -63,7 +63,7 @@ export async function playUntilDeath(harness: GameHarness): Promise<void> {
   await harness.tickN(30); // Let game settle
 
   await harness.setState({
-    player: { health: 0, lives: 0 },
+    player: { lives: 0, alive: false },
   });
   await harness.tickN(30);
 }
@@ -172,7 +172,7 @@ export async function giveCoins(
 /** Set player to near-death state (1 life, 1 health). */
 export async function setNearDeath(harness: GameHarness): Promise<void> {
   await harness.setState({
-    player: { health: 1, lives: 1 },
+    player: { lives: 1 },
   });
   await harness.tickN(1);
 }
